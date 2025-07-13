@@ -1,0 +1,156 @@
+// Main frontend-backend full-stack starter code for Smart Image Updater
+// React frontend + Express backend + SQLite + Sharp for image processing
+
+// --- Directory Structure ---
+// smart-image-updater/
+// ├── backend/
+// │   ├── server.js
+// │   ├── db.js
+// │   ├── routes/
+// │   │   └── products.js
+// ├── frontend/
+// │   └── (React App here)
+// └── images/ (for saved product images)
+
+// === BACKEND === //
+
+// File: backend/server.js
+const express = require('express');
+const cors = require('cors');
+const productRoutes = require('./routes/products');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+app.use('/api/products', productRoutes);
+app.use('/images', express.static('images'));
+
+app.listen(5000, () => console.log('Server running on port 5000'));
+
+// File: backend/db.js
+const sqlite3 = require('sqlite3').verbose();
+const db = new sqlite3.Database('./catalog.db');
+
+db.serialize(() => {
+  db.run(`CREATE TABLE IF NOT EXISTS products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    code TEXT NOT NULL,
+    image_path TEXT
+  )`);
+});
+
+module.exports = db;
+
+// File: backend/routes/products.js
+const express = require('express');
+const axios = require('axios');
+const fs = require('fs');
+const sharp = require('sharp');
+const db = require('../db');
+const router = express.Router();
+
+// Get products with no image
+router.get('/no-image', (req, res) => {
+  db.all('SELECT * FROM products WHERE image_path IS NULL', (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+// Search images using Unsplash API (or Google/Bing API)
+router.get('/search-image', async (req, res) => {
+  const query = req.query.q;
+  try {
+    const response = await axios.get(`https://api.unsplash.com/search/photos`, {
+      params: { query, per_page: 5 },
+      headers: { Authorization: `Client-ID YOUR_UNSPLASH_ACCESS_KEY` },
+    });
+    const imageUrls = response.data.results.map(img => img.urls.small);
+    res.json(imageUrls);
+  } catch (err) {
+    res.status(500).json({ error: 'Image search failed' });
+  }
+});
+
+// Download, resize, and save selected image
+router.post('/save-image', async (req, res) => {
+  const { productId, imageUrl } = req.body;
+  const filename = `images/product_${productId}.jpg`;
+
+  try {
+    const response = await axios({ url: imageUrl, responseType: 'arraybuffer' });
+    const buffer = Buffer.from(response.data, 'binary');
+    await sharp(buffer).resize(500, 500).toFile(filename);
+
+    db.run('UPDATE products SET image_path = ? WHERE id = ?', [filename, productId], err => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ message: 'Image saved', path: filename });
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Image processing failed' });
+  }
+});
+
+module.exports = router;
+
+
+// === FRONTEND (React) === //
+
+// File: frontend/src/App.js
+import React, { useEffect, useState } from 'react';
+import axios from 'axios';
+
+function App() {
+  const [products, setProducts] = useState([]);
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [images, setImages] = useState([]);
+
+  useEffect(() => {
+    axios.get('http://localhost:5000/api/products/no-image').then(res => {
+      setProducts(res.data);
+    });
+  }, []);
+
+  const searchImages = async (product) => {
+    const res = await axios.get('http://localhost:5000/api/products/search-image?q=' + product.name);
+    setSelectedProduct(product);
+    setImages(res.data);
+  };
+
+  const selectImage = async (url) => {
+    await axios.post('http://localhost:5000/api/products/save-image', {
+      productId: selectedProduct.id,
+      imageUrl: url
+    });
+    alert('Image saved successfully!');
+    window.location.reload();
+  };
+
+  return (
+    <div className="p-6">
+      <h1 className="text-2xl font-bold mb-4">Products Missing Images</h1>
+      <ul>
+        {products.map(p => (
+          <li key={p.id} className="mb-2">
+            {p.name} ({p.code})
+            <button onClick={() => searchImages(p)} className="ml-2 px-2 py-1 bg-blue-500 text-white rounded">Find Image</button>
+          </li>
+        ))}
+      </ul>
+
+      {images.length > 0 && (
+        <div className="mt-6">
+          <h2 className="text-xl font-semibold mb-2">Select an Image for {selectedProduct.name}</h2>
+          <div className="grid grid-cols-3 gap-4">
+            {images.map((img, i) => (
+              <img key={i} src={img} alt="option" className="cursor-pointer border" onClick={() => selectImage(img)} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default App;
