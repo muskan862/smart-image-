@@ -1,0 +1,8 @@
+"scripts": {
+  "server": "nodemon backend/server.js",
+  "client": "npm start --prefix frontend",
+  "dev": "concurrently -n \"BACKEND,FRONTEND\" -c \"red,blue\" \"npm run server\" \"npm run client\""
+
+}
+
+
